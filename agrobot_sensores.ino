@@ -7,6 +7,7 @@
 #define BLUETOOTH_RX 10
 #define BLUETOOTH_TX 11
 #define PIN_SENSOR_LLUVIA A0
+#define PIN_HUMEDAD_SUELO A2
 #define PIN_POWER_SENSOR 7
 #define PIN_LUMINISCENCIA A1
 
@@ -41,6 +42,7 @@ void enviar_datos_bluetooth(const SensorData& datos);
 // =============== SETUP ===============
 void setup() {
     Serial.begin(9600);
+
     bluetooth.begin(9600);
     dht.begin();
     
@@ -74,7 +76,7 @@ SensorData leer_sensores() {
     // Lectura sensor de lluvia/humedad suelo
     digitalWrite(PIN_POWER_SENSOR, HIGH);
     delay(50);  // Estabilización del sensor
-    datos.humedad_suelo = analogRead(PIN_SENSOR_LLUVIA) * (100.0f / 1023.0f);
+    datos.humedad_suelo = analogRead(PIN_HUMEDAD_SUELO) * (100.0f / 1023.0f);
     digitalWrite(PIN_POWER_SENSOR, LOW);
     datos.lluvia = (datos.humedad_suelo >= UMBRAL_LLUVIA);
 
