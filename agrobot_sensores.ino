@@ -1,121 +1,87 @@
 #include <SoftwareSerial.h>
+// DHT
 #include <DHT.h>
-
-// =============== CONSTANTES Y CONFIGURACIÓN ===============
 #define DHTPIN 2
-#define DHTTYPE DHT11
-#define BLUETOOTH_RX 10
-#define BLUETOOTH_TX 11
-#define PIN_SENSOR_LLUVIA A0
-#define PIN_HUMEDAD_SUELO A2
-#define PIN_POWER_SENSOR 7
-#define PIN_LUMINISCENCIA A1
-
-// Umbrales de sensores
-const float UMBRAL_LLUVIA = 20.0f;
-const float UMBRAL_CAMBIO_TEMP = 0.2f;
-const float UMBRAL_CAMBIO_HUMEDAD = 0.5f;
-const unsigned long INTERVALO_LECTURAS = 2000;
-
-// Objetos de hardware
+#define DHTTYPE DHT11 // o DHT22
 DHT dht(DHTPIN, DHTTYPE);
-SoftwareSerial bluetooth(BLUETOOTH_RX, BLUETOOTH_TX);
 
-// =============== VARIABLES GLOBALES ===============
-struct SensorData {
-    bool lluvia;
-    float humedad_suelo;
-    float humedad_ambiente;
-    float temperatura;
-    int luminiscencia;
-};
+SoftwareSerial BT(10, 11); // Bluetooth: TX, RX
 
-SensorData datos_actuales;
-SensorData datos_anteriores = {false, -1.0f, -1.0f, -1.0f, -1};
-bool primer_envio = true;
+const int PIN_SENSOR_LLUVIA = A0;
+const int powerPin = 7;
+const int PIN_SENSOR_HUMEDAD_SUELO = A1;
+const int PIN_LUZ = A5;
 
-// =============== PROTOTIPOS DE FUNCIONES ===============
-SensorData leer_sensores();
-bool hubo_cambios_significativos(const SensorData& actual, const SensorData& anterior);
-void enviar_datos_bluetooth(const SensorData& datos);
 
-// =============== SETUP ===============
+const float umbralLluvia = 20.0;
+const float umbralTempCambio = 0.2;     // más sensible
+const float umbralHumedadCambio = 0.5;  // más sensible
+
+bool lluviaAnterior = false;
+float tempAnterior = -1000;
+float humedadAnterior = -1000;
+float humedad_suelo_anterior = -1000;
+bool primerEnvio = true;
+
 void setup() {
-    Serial.begin(9600);
-
-    bluetooth.begin(9600);
-    dht.begin();
-    
-    pinMode(PIN_POWER_SENSOR, OUTPUT);
-    pinMode(PIN_LUMINISCENCIA, INPUT);
-    
-    Serial.println("Sistema de monitoreo ambiental iniciado");
+  Serial.begin(9600);
+  BT.begin(9600);
+  dht.begin();
+  pinMode(powerPin, OUTPUT);
 }
 
-// =============== LOOP PRINCIPAL ===============
 void loop() {
-    static unsigned long ultimo_intervalo = 0;
-    
-    if (millis() - ultimo_intervalo >= INTERVALO_LECTURAS) {
-        ultimo_intervalo = millis();
-        
-        datos_actuales = leer_sensores();
-        
-        if (primer_envio || hubo_cambios_significativos(datos_actuales, datos_anteriores)) {
-            enviar_datos_bluetooth(datos_actuales);
-            datos_anteriores = datos_actuales;
-            primer_envio = false;
-        }
-    }
-}
+  // Leer lluvia
+  digitalWrite(powerPin, HIGH);
+  delay(100);
+  int raw = analogRead(PIN_SENSOR_LLUVIA);
+  digitalWrite(powerPin, LOW);
 
-// =============== IMPLEMENTACIÓN DE FUNCIONES ===============
-SensorData leer_sensores() {
-    SensorData datos;
-    
-    // Lectura sensor de lluvia/humedad suelo
-    digitalWrite(PIN_POWER_SENSOR, HIGH);
-    delay(50);  // Estabilización del sensor
-    datos.humedad_suelo = analogRead(PIN_HUMEDAD_SUELO) * (100.0f / 1023.0f);
-    digitalWrite(PIN_POWER_SENSOR, LOW);
-    datos.lluvia = (datos.humedad_suelo >= UMBRAL_LLUVIA);
+  float profundidad = raw * (5.0 / 1023.0) * 100;
+  bool hayAgua = (profundidad >= umbralLluvia);
 
-    // Lectura DHT (ambiente)
-    datos.humedad_ambiente = dht.readHumidity();
-    datos.temperatura = dht.readTemperature();
+  // Leer DHT
+  float temp = dht.readTemperature();
+  float humedad = dht.readHumidity();
+    if (isnan(temp) || isnan(humedad)) {
+    Serial.println("Error leyendo DHT");
+    return;
+  }
+  // sensor humedad suelo
+  int rawValue = analogRead(PIN_SENSOR_HUMEDAD_SUELO); // Rango típico: 0-1023
+  int humedad_suelo = map(rawValue, 0, 1023, 0, 100); // Conversión a porcentaje
+  // sensor Luz
+  int valor_luz = analogRead(PIN_LUZ); // Lectura del sensor (0-1023)
+  int porcentaje_luz = map(valor_luz, 0, 1023, 0, 100); // Conversión a porcentaje
 
-    // Lectura luminiscencia (LDR)
-    datos.luminiscencia = analogRead(PIN_LUMINISCENCIA);
+  // Verificar cambios
+  bool cambioLluvia = (hayAgua != lluviaAnterior);
+  bool cambioTemp = abs(temp - tempAnterior) >= umbralTempCambio;
+  bool cambioHumedad = abs(humedad - humedadAnterior) >= umbralHumedadCambio;
+  bool cambio_humedad_suelo = abs(humedad_suelo - humedad_suelo_anterior) != 0;
 
-    // Validación de lecturas
-    if (isnan(datos.humedad_ambiente) || isnan(datos.temperatura)) {
-        Serial.println("Error en lectura DHT!");
-        datos.humedad_ambiente = -1.0f;
-        datos.temperatura = -1.0f;
-    }
+  if (primerEnvio || cambioLluvia || cambioTemp || cambioHumedad || cambio_humedad_suelo ) {
+    primerEnvio = false;
+    lluviaAnterior = hayAgua;
+    tempAnterior = temp;
+    humedadAnterior = humedad;
+    humedad_suelo_anterior = humedad_suelo;
 
-    return datos;
-}
+    String estadoLluvia = hayAgua ? "1" : "0";
 
-bool hubo_cambios_significativos(const SensorData& actual, const SensorData& anterior) {
-    return (actual.lluvia != anterior.lluvia) ||
-           (fabs(actual.humedad_suelo - anterior.humedad_suelo) >= UMBRAL_CAMBIO_HUMEDAD) ||
-           (fabs(actual.temperatura - anterior.temperatura) >= UMBRAL_CAMBIO_TEMP) ||
-           (abs(actual.luminiscencia - anterior.luminiscencia) >= 50);  // Umbral luminiscencia
-}
+    String mensaje = "Estado: " + estadoLluvia;
+    mensaje += " | Temp: " + String(temp, 1) + "°C";
+    mensaje += " | Humedad: " + String(humedad, 1) + "%";
 
-void enviar_datos_bluetooth(const SensorData& datos) {
-    // Formato: bool,float,float,float,int
-    String mensaje = 
-        String(datos.lluvia) + "," +
-        String(datos.humedad_suelo, 1) + "," +
-        String(datos.humedad_ambiente, 1) + "," +
-        String(datos.temperatura, 1) + "," +
-        String(datos.luminiscencia);
 
-    bluetooth.println(mensaje);
-    
-    // Debug por serial
-    Serial.print("Enviado: ");
-    Serial.println(mensaje);
+    Serial.print("Valor analógico: ");
+    Serial.print(rawValue);
+    Serial.print(" | Humedad: ");
+    Serial.print(humedad_suelo);
+    Serial.println("%");
+    Serial.println(estadoLluvia + "," + humedad_suelo + "," + humedad + "," + temp+","+ valor_luz);
+    BT.println(estadoLluvia + "," + humedad_suelo + "," + humedad + "," + temp +","+ valor_luz);
+  }
+
+  delay(2000);
 }
